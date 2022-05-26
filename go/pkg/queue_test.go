@@ -1,9 +1,11 @@
 package pkg
 
 import (
-	"github.com/google/go-cmp/cmp"
 	"reflect"
+	"sync"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestNewQueue(t *testing.T) {
@@ -16,7 +18,6 @@ func TestNewQueue(t *testing.T) {
 	if got := NewQueue[string](); !reflect.DeepEqual(got, &queue[string]{}) {
 		t.Errorf("NewQueue() fail to create string Queue")
 	}
-
 }
 
 func Test_queue_Enqueue(t *testing.T) {
@@ -46,7 +47,8 @@ func Test_queue_Enqueue(t *testing.T) {
 			t.Parallel()
 			tt.initial.Enqueue(tt.elem)
 
-			if diff := cmp.Diff(tt.initial, tt.want, cmp.AllowUnexported(queue[int]{})); diff != "" {
+			if diff := cmp.Diff(tt.initial, tt.want,
+				cmp.AllowUnexported(queue[int]{}, sync.RWMutex{}, sync.Mutex{})); diff != "" {
 				t.Errorf("fail to Enqueue diff=%s", diff)
 			}
 		})
@@ -92,7 +94,8 @@ func Test_queue_Dequeue(t *testing.T) {
 				t.Fatalf("fail to Dequeue wantElem=%v,%v, got=%v,%v", tt.wantElem, tt.wantOK, elem, ok)
 			}
 
-			if diff := cmp.Diff(tt.initial, tt.want, cmp.AllowUnexported(queue[int]{})); diff != "" {
+			if diff := cmp.Diff(tt.initial, tt.want,
+				cmp.AllowUnexported(queue[int]{}, sync.RWMutex{}, sync.Mutex{})); diff != "" {
 				t.Fatalf("fail to Dequeue diff=%s", diff)
 			}
 		})
@@ -138,7 +141,8 @@ func Test_queue_Peek(t *testing.T) {
 				t.Fatalf("fail to Peek wantElem=%v,%v, got=%v,%v", tt.wantElem, tt.wantOK, elem, ok)
 			}
 
-			if diff := cmp.Diff(tt.initial, tt.want, cmp.AllowUnexported(queue[int]{})); diff != "" {
+			if diff := cmp.Diff(tt.initial, tt.want,
+				cmp.AllowUnexported(queue[int]{}, sync.RWMutex{}, sync.Mutex{})); diff != "" {
 				t.Fatalf("fail to Peek diff=%s", diff)
 			}
 		})
@@ -176,5 +180,80 @@ func Test_queue_IsEmpty(t *testing.T) {
 				t.Errorf("fail to IsEmpty want=%v, got=%v", tt.want, got)
 			}
 		})
+	}
+}
+
+func Test_queue_Size(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		initQueue Queue[int]
+		want      int
+	}{
+		{
+			name:      "size 1",
+			initQueue: &queue[int]{},
+			want:      1,
+		}, {
+			name:      "size 2",
+			initQueue: &queue[int]{mem: []int{0}},
+			want:      2,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.initQueue.Enqueue(1)
+			if got := tt.initQueue.Size(); got != tt.want {
+				t.Errorf("Size() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestForConcurrencySafe(t *testing.T) {
+	t.Parallel()
+	total := 10000
+	newQueue := NewQueue[int]()
+
+	// test for concurrent writes
+	concurrentWrites(total, newQueue)
+	if newQueue.Size() != total {
+		t.Fatalf("concurrent writes %d", newQueue.Size())
+	}
+
+	concurrentReads(total, newQueue)
+	if newQueue.Size() != 0 {
+		t.Fatalf("concurrent reads %d", newQueue.Size())
+	}
+}
+
+func concurrentWrites(total int, newQueue Queue[int]) {
+	wait := make(chan int)
+	defer close(wait)
+	for i := 0; i < total; i++ {
+		i := i
+		go func() {
+			newQueue.Enqueue(i)
+			wait <- i
+		}()
+	}
+	for i := 0; i < total; i++ {
+		<-wait
+	}
+}
+
+func concurrentReads(total int, newQueue Queue[int]) {
+	wait := make(chan int)
+	defer close(wait)
+	for i := 0; i < total; i++ {
+		go func() {
+			dequeue, _ := newQueue.Dequeue()
+			wait <- dequeue
+		}()
+	}
+	for i := 0; i < total; i++ {
+		<-wait
 	}
 }
